@@ -1,0 +1,138 @@
+// WorthShare database schema (spec.md §5).
+// The connection URL is configured in prisma.config.ts (DATABASE_URL).
+//
+// Constraints that Prisma cannot express are added by hand in the migration SQL:
+//   - citext extension (case-insensitive unique category names)
+//   - CHECK constraints for non-blank text and sponsored/status consistency
+//   - CHECK constraints tying declaresSponsored to isSponsored and status
+//   - CHECK constraint tying declaresSponsored to the disclosure details
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  runtime             = "nodejs"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  User
+  Admin
+}
+
+enum RecommendationStatus {
+  Published
+  PendingSponsoredApproval
+  Rejected
+  Removed
+}
+
+/// The author's commercial relationship with the recommended product (disclosure).
+enum SponsorshipType {
+  PaidPromotion
+  FreeProduct
+  AffiliateLink
+  OwnBusiness
+  /// Any other relationship; disclosureDetails must then explain it (DB CHECK).
+  Other
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  fullName     String   @db.VarChar(100)
+  /// Stored normalized (trimmed, lower-case) by the application.
+  email        String   @unique @db.VarChar(254)
+  passwordHash String
+  role         Role     @default(User)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  recommendations         Recommendation[] @relation("RecommendationAuthor")
+  reviewedRecommendations Recommendation[] @relation("RecommendationReviewer")
+  favorites               Favorite[]
+
+  @@index([role, isActive])
+  @@map("users")
+}
+
+model Category {
+  id          Int      @id @default(autoincrement())
+  /// citext: uniqueness is case-insensitive.
+  name        String   @unique @db.Citext
+  description String?  @db.VarChar(500)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  recommendations Recommendation[]
+
+  @@map("categories")
+}
+
+model Recommendation {
+  id                Int                  @id @default(autoincrement())
+  title             String               @db.VarChar(120)
+  description       String               @db.VarChar(3000)
+  categoryId        Int
+  url               String?              @db.VarChar(2048)
+  imageUrl          String?              @db.VarChar(2048)
+  createdByUserId   Int
+  createdAt         DateTime             @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @db.Timestamptz(3)
+  /// Server-controlled approval flag: true only after an admin approves.
+  isSponsored       Boolean              @default(false)
+  /// The owner's sponsorship declaration. Set by requesting sponsored approval;
+  /// cleared only by the explicit "publish as regular" action. Never taken from
+  /// request bodies. While Published, it must equal isSponsored (DB CHECK).
+  declaresSponsored Boolean              @default(false)
+  /// Disclosure details, given when requesting sponsored approval. Set exactly
+  /// when declaresSponsored is true (DB CHECK); cleared with the declaration.
+  sponsorName       String?              @db.VarChar(120)
+  productName       String?              @db.VarChar(120)
+  sponsorshipType   SponsorshipType?
+  disclosureDetails String?              @db.VarChar(1000)
+  status           RecommendationStatus @default(Published)
+  reviewedByUserId  Int?
+  reviewedAt        DateTime?            @db.Timestamptz(3)
+  rejectionReason   String?              @db.VarChar(1000)
+
+  // Categories and users are never physically deleted while referenced.
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  createdBy  User     @relation("RecommendationAuthor", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  reviewedBy User?    @relation("RecommendationReviewer", fields: [reviewedByUserId], references: [id], onDelete: Restrict)
+  favoritedBy Favorite[]
+
+  // Public listing: published, newest first / by title.
+  @@index([status, createdAt])
+  @@index([status, title])
+  // Category filtering within published listing.
+  @@index([categoryId, status, createdAt])
+  // "My recommendations".
+  @@index([createdByUserId, createdAt])
+  @@index([reviewedByUserId])
+  @@map("recommendations")
+}
+
+/// A recommendation a user saved for quick access. One row per (user, recommendation).
+/// Only Published recommendations can be added or are listed; a saved one that
+/// later leaves public view simply stops appearing until it is published again.
+model Favorite {
+  userId           Int
+  recommendationId Int
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  // Join rows only: removing either side removes the favorite.
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recommendation Recommendation @relation(fields: [recommendationId], references: [id], onDelete: Cascade)
+
+  @@id([userId, recommendationId])
+  // "My favorites", newest saved first.
+  @@index([userId, createdAt])
+  @@index([recommendationId])
+  @@map("favorites")
+}
