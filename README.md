@@ -4,6 +4,8 @@ Backend API for **WorthShare**, a platform where users discover, search and shar
 
 **Interactive API docs:** `http://localhost:4000/api/docs` (Swagger UI) — see [API documentation](#api-documentation).
 
+**Live deployment:** API at `https://worthshare-api.onrender.com/api` (Render, free tier — the first request after idle can take ~30 s), Swagger UI at [`/api/docs`](https://worthshare-api.onrender.com/api/docs), database on Neon. Client: https://worth-share-client.vercel.app
+
 ## Contents
 
 - [Technology stack](#technology-stack)
